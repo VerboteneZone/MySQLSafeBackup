@@ -1,0 +1,1168 @@
+#!/bin/bash
+
+function license() {
+cat <<EOF
+#=====================================================================
+# MySQL Safe Backup Script
+# VER. 1.0 - https://github.com/VerboteneZone/MySQLSafeBackup/
+# Copyright (c) 2016 olli@verbotene.zone
+#===================================================================== 
+# This is a fork of automysqlbackup 2.5 by wipe_out@lycos.co.uk
+# http://sourceforge.net/projects/automysqlbackup/
+# Copyright (c) 2002-2003 wipe_out@lycos.co.uk
+#=====================================================================
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>
+#
+#=====================================================================
+EOF
+}
+
+# Bailout function
+function bailout() {
+	echo "$1" 1>&2
+	exit 1
+}
+
+# Check dependencies
+whereis awk >/dev/null 2>&1        || bailout "awk is missing"
+whereis sed >/dev/null 2>&1        || bailout "sed is missing"
+whereis grep >/dev/null 2>&1       || bailout "grep is missing"
+whereis mysql >/dev/null 2>&1      || bailout "mysql is missing"
+whereis mysqldump >/dev/null 2>&1  || bailout "mysqldump is missing"
+whereis gpg >/dev/null 2>&1        || bailout "gpg is missing"
+whereis aespipe >/dev/null 2>&1    || bailout "aespipe is missing"
+whereis bzip2 >/dev/null 2>&1      || bailout "bzip2 is missing"
+whereis gzip >/dev/null 2>&1       || bailout "gzip is missing"
+whereis bunzip2 >/dev/null 2>&1    || bailout "bunzip2 is missing"
+whereis gunzip >/dev/null 2>&1     || bailout "gunzip is missing"
+whereis makepasswd >/dev/null 2>&1 || bailout "makepasswd is missing"
+
+# Try to load configuration
+if [ -f /etc/mysqlsafebackup/mysqlsafebackup.conf ] ; then
+	. /etc/mysqlsafebackup/mysqlsafebackup.conf
+else
+
+# MODE variable - dont touch it, unless you know, what you're doing
+# This is set to usage by default, to prevent this script running as a cronjob in cron.daily e.g.
+# If you want to use cron.daily, set MODE=backup in /etc/mysqlsafebackup/mysqlsafebackup.conf
+MODE=usage
+
+# Defaults file for MySQL
+MYSQLDEFAULTS="/etc/mysql/debian.cnf"
+
+# Username to access the MySQL server e.g. dbuser
+#USERNAME=`grep user $MYSQLDEFAULTS | tail -n 1 | cut -d"=" -f2 | awk '{print $1}'`
+
+# Username to access the MySQL server e.g. password
+#PASSWORD=`grep password $MYSQLDEFAULTS | tail -n 1 | cut -d"=" -f2 | awk '{print $1}'`
+
+# Host name (or IP address) of MySQL server e.g localhost
+DBHOST=localhost
+
+# List of DBNAMES for Daily/Weekly Backup e.g. "DB1 DB2 DB3"
+DBNAMES=`mysql --defaults-file=$MYSQLDEFAULTS --execute="SHOW DATABASES" | awk '{print $1}' | grep -v ^Database$ | grep -v ^mysql$ | grep -v ^performance_schema$ | grep -v ^information_schema$ | tr \\\r\\\n ,\ `
+
+# Backup directory location e.g /var/backups/mysql
+BACKUPDIR="/var/backups/mysql"
+
+# GPG public key id to use for encryption
+GPGKEYID="1234567F"
+
+# File containing the encrypted GPG keys to use (65 keys, at least 20 chars per key, encrypted by gpg for GPGKEYID above)
+GPGKEYFILE="/etc/mysqlsafebackup/gpg/.encryption.keys"
+
+# File containing the GPG private key password (YOU HAVE TO PROTECT THIS FILE!!)
+GPGPASSWDFILE="/etc/mysqlsafebackup/gpg/.privatekey.passwd"
+
+# GPG home dir
+GPGHOMEDIR="$HOME/.gnupg"
+
+# Mail setup
+# What would you like to be mailed to you?
+# - log   : send only log file
+# - files : send log file and sql files as attachments (see docs)
+# - stdout : will simply output the log to the screen if run manually.
+# - quiet : Only send logs if an error occurs to the MAILADDR.
+MAILCONTENT="stdout"
+
+# Set the maximum allowed email size in k. (4000 = approx 5MB email [see docs])
+MAXATTSIZE="4000"
+
+# Email Address to send mail to? (user@domain.com)
+MAILADDR="root@localhost"
+
+# ============================================================
+# === ADVANCED OPTIONS ( Read the doc's below for details )===
+#=============================================================
+
+# List of DBBNAMES for Monthly Backups.
+MDBNAMES="mysql $DBNAMES"
+
+# List of DBNAMES to EXLUCDE if DBNAMES are set to all (must be in " quotes)
+DBEXCLUDE=""
+
+# Include CREATE DATABASE in backup?
+CREATE_DATABASE=yes
+
+# Separate backup directory and file for each DB? (yes or no)
+SEPDIR=yes
+
+# Which day do you want weekly backups? (1 to 7 where 1 is Monday)
+DOWEEKLY=6
+
+# Use encryption
+ENC=yes
+
+# Choose Compression type. (gzip or bzip2)
+COMP=bzip2
+
+# Compress communications between backup server and MySQL server?
+COMMCOMP=no
+
+# Additionally keep a copy of the most recent backup in a seperate directory.
+LATEST=no
+
+#  The maximum size of the buffer for client/server communication. e.g. 16MB (maximum is 1GB)
+MAX_ALLOWED_PACKET=
+
+#  For connections to localhost. Sometimes the Unix socket file must be specified.
+SOCKET=
+
+# Command to run before backups (uncomment to use)
+#PREBACKUP=""
+
+# Command run after backups (uncomment to use)
+#POSTBACKUP=""
+
+# Backup of stored procedures and routines
+ROUTINES=yes
+
+fi
+
+function doc() {
+cat <<EOF
+#=====================================================================
+# Options documantation
+#=====================================================================
+#
+# MODE is set to usage by default, what leads the script to display
+# a simple usage, when starting without any option. If you want to 
+# use the script in cron.daily, set MODE=backup in the configuration
+# file: /etc/mysqlsafebackup/mysqlsafebackup.conf
+# Other options are: usage|backup|restore|cat
+# Dont set this value to restore or cat, if you not know what you are
+# doing!
+#
+# Set MYSQLDEFAULTS to the file containing the defaults for your
+# mysql installation. On Debian this is by default /etc/mysql/debian.cnf
+#
+# Set USERNAME and PASSWORD of a user that has at least SELECT permission
+# to ALL databases.
+#
+# Set the DBHOST option to the server you wish to backup, leave the
+# default to backup "this server".(to backup multiple servers make
+# a copy of configuration file an use --config-file parameter)
+#
+# Put in the list of DBNAMES(Databases)to be backed up. If you would like
+# to backup ALL DBs on the server set DBNAMES="all".(if set to "all" then
+# any new DBs will automatically be backed up without needing to modify
+# this backup script when a new DB is created).
+#
+# If the DB you want to backup has a space in the name replace the space
+# with a % e.g. "data base" will become "data%base"
+# NOTE: Spaces in DB names may not work correctly when SEPDIR=no.
+#
+# You can change the backup storage location from /var/backups/mysql to anything
+# you like by using the BACKUPDIR setting..
+#
+# GPGKEYID is set to the public key id for the key, you would like to use for
+# encryption. You need a corresponding private key for this to work.
+#
+# GPGKEYFILE is the location of the file, holding the real encryption keys
+# for the backup. The file consists of 65 lines of keys, each with a length
+# of 20 chars. Than this file is encrypted using gpg and the public key id.
+# You can generate such a file, using the mysqlsafebackup --gen-keyfile command.
+#
+# GPGPASSWDFILE is the location of the file, containing the private key password
+# for the public key, stored in GPGKEYID. This is used by aespipe, to decrypt
+# the file, configured by GPGKEYFILE, which holds the real encryption keys.
+#
+# GPGHOMEDIR can be specified, to use a separate location for the gpg keyring.
+# This is useful, if you want to have a separate keyring for your backups.
+#
+# The MAILCONTENT and MAILADDR options and pretty self explanitory, use
+# these to have the backup log mailed to you at any email address or multiple
+# email addresses in a space seperated list.
+# (If you set mail content to "log" you will require access to the "mail" program
+# on your server. If you set this to "files" you will have to have mutt installed
+# on your server. If you set it to "stdout" it will log to the screen if run from 
+# the console or to the cron job owner if run through cron. If you set it to "quiet"
+# logs will only be mailed if there are errors reported. )
+#
+# MAXATTSIZE sets the largest allowed email attachments total (all backup files) you
+# want the script to send. This is the size before it is encoded to be sent as an email
+# so if your mail server will allow a maximum mail size of 5MB I would suggest setting
+# MAXATTSIZE to be 25% smaller than that so a setting of 4000 would probably be fine.
+#
+# Finally copy mysqlsafebackup to anywhere on your server and make sure
+# to set executable permission. You can also copy the script to
+# /etc/cron.daily to have it execute automatically every night or simply
+# place a symlink in /etc/cron.daily to the file if you wish to keep it 
+# somwhere else.
+#
+# NOTE:On Debian copy the file with no extension for it to be run
+# by cron e.g just name the file "mysqlsafebackup"
+#
+# Thats it..
+#
+#
+# === Advanced options doc's ===
+#
+# The list of MDBNAMES is the DB's to be backed up only monthly. You should
+# always include "mysql" in this list to backup your user/password
+# information along with any other DBs that you only feel need to
+# be backed up monthly. (if using a hosted server then you should
+# probably remove "mysql" as your provider will be backing this up)
+# NOTE: If DBNAMES="all" then MDBNAMES has no effect as all DBs will be backed
+# up anyway.
+#
+# If you set DBNAMES="all" you can configure the option DBEXCLUDE. Other
+# wise this option will not be used.
+# This option can be used if you want to backup all dbs, but you want 
+# exclude some of them. (eg. a db is to big).
+#
+# Set CREATE_DATABASE to "yes" (the default) if you want your SQL-Dump to create
+# a database with the same name as the original database when restoring.
+# Saying "no" here will allow your to specify the database name you want to
+# restore your dump into, making a copy of the database by using the dump
+# created with mysqlsafebackup.
+# NOTE: Not used if SEPDIR=no
+#
+# The SEPDIR option allows you to choose to have all DBs backed up to
+# a single file (fast restore of entire server in case of crash) or to
+# seperate directories for each DB (each DB can be restored seperately
+# in case of single DB corruption or loss).
+#
+# To set the day of the week that you would like the weekly backup to happen
+# set the DOWEEKLY setting, this can be a value from 1 to 7 where 1 is Monday,
+# The default is 6 which means that weekly backups are done on a Saturday.
+#
+# ENC can be set to yes, which leads mysqlsafebackup to encrypt the resulting
+# backup file, using aespipe. Other values than yes, will disable encryption.
+#
+# COMP is used to choose the copmression used, options are gzip or bzip2.
+# bzip2 will produce slightly smaller files but is more processor intensive so
+# may take longer to complete.
+#
+# COMMCOMP is used to enable or diable mysql client to server compression, so
+# it is useful to save bandwidth when backing up a remote MySQL server over
+# the network. 
+#
+# LATEST is to store an additional copy of the latest backup to a standard
+# location so it can be downloaded bt thrid party scripts.
+#
+# If the DB's being backed up make use of large BLOB fields then you may need
+# to increase the MAX_ALLOWED_PACKET setting, for example 16MB..
+#
+# When connecting to localhost as the DB server (DBHOST=localhost) sometimes
+# the system can have issues locating the socket file.. This can now be set
+# using the SOCKET parameter.. An example may be SOCKET=/private/tmp/mysql.sock
+#
+# Use PREBACKUP and POSTBACKUP to specify Per and Post backup commands
+# or scripts to perform tasks either before or after the backup process.
+#
+#=====================================================================
+# Backup Rotation..
+#=====================================================================
+#
+# Daily Backups are rotated weekly..
+# Weekly Backups are run by default on Saturday Morning when
+# cron.daily scripts are run...Can be changed with DOWEEKLY setting..
+# Weekly Backups are rotated on a 5 week cycle..
+# Monthly Backups are run on the 1st of the month..
+# Monthly Backups are NOT rotated automatically...
+# It may be a good idea to copy Monthly backups offline or to another
+# server..
+#
+#=====================================================================
+# Please Note!!
+#=====================================================================
+#
+# I take no responsibility for any data loss or corruption when using
+# this script..
+# This script will not help in the event of a hard drive crash. If a 
+# copy of the backup has not be stored offline or on another PC..
+# You should copy your backups offline regularly for best protection.
+#
+# Happy backing up...
+#
+#=====================================================================
+# Restoring / Extracting backup
+#=====================================================================
+# 
+# FIRST OF ALL - AN IMPORTANT HINT!!
+# BE VERY VERY CAREFUL WITH THIS AND REMEBER THE NOTE BEFORE!
+#
+# To restore a single database, you need to know, where the backup
+# file is stored and at least the target database name.
+#
+# Lets assume, the backup file is /tmp/backup.sql.gz.aes, the 
+# backup is encrypted and compressed, the keys and options did,
+# not change since the last backup, and the target database is
+# called MyRestDB - then you have to do simply this:
+#
+# mysqlsafebackup --restore /tmp/backup.sql.gz.aes --target MyRestDB
+#
+# When using --target, CREATE DATABASE and USE will be removed from
+# SQL buffer to import. When not using --target, the backup file
+# must include CREATE DATABASE and USE, otherwise restore will not
+# work.
+#
+# If you only want to extract the backup contents, just do:
+#
+# mysqlsafebackup --cat /tmp/backup.sql.gz.aes
+#
+# This will decrypt and decompress /tmp/backup.sql.gz.aes and writes
+# the SQL content to the terminal (where it can be pipelined, also).
+#
+# Lets hope you never have to use this.. :)
+#
+#=====================================================================
+# Change Log
+#=====================================================================
+#
+# VER 1.0 - (2016-06-21)
+#		Initial fork of automysqlbackup
+#                  added crypto support
+#                  added command line arguments
+#                  added backup decrypt (cat) support
+#                  initial code changes
+#                  documentation updates
+#
+#=====================================================================
+EOF
+}
+
+#=====================================================================
+#=====================================================================
+#
+# Should not need to be modified from here down!!
+#
+#=====================================================================
+#=====================================================================
+
+PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/mysql/bin 
+DATE=`date +%Y-%m-%d_%Hh%Mm`				# Datestamp e.g 2002-09-21
+DOW=`date +%A`							# Day of the week e.g. Monday
+DNOW=`date +%u`						# Day number of the week 1 to 7 where 1 represents Monday
+DOM=`date +%d`							# Date of the Month e.g. 27
+M=`date +%B`							# Month e.g January
+W=`date +%V`							# Week Number e.g 37
+VER=1.0									# Version Number
+LOGFILE=$BACKUPDIR/$DBHOST-`date +%N`.log		# Logfile Name
+LOGERR=$BACKUPDIR/ERRORS_$DBHOST-`date +%N`.log		# Logfile Name
+BACKUPFILES=""
+OPT="--quote-names --events"			# OPT string for use with mysqldump ( see man mysqldump )
+backupfile=""
+targetdb=""
+
+# Check, whether we have to encrypt and anything works fine
+if [ "$ENC" = "yes" ]; then
+	[ -n "$GPGHOMEDIR" ] || bailout "GPG home directory not set"
+	[ -n "$GPGKEYID" ] || bailout "GPG public key id not set"
+	gpg --list-keys	$GPGKEYID >/dev/null 2>&1 || bailout "GPG key id $GPGKEYID not found"
+	[ -n "$GPGPASSWDFILE" ] || bailout "Private key password file not set"
+	[ -f "$GPGPASSWDFILE" ] || bailout "Private key password file not found in $GPGPASSWDFILE"
+	[ -n "$GPGKEYFILE" ] || bailout "Encryption keyfile not set"
+	
+	if [ "$1" = "--gen-keyfile" ]; then
+		echo -n "Creating new keys in file $GPGKEYFILE..."
+		makepasswd --chars 20 --count 65 | gpg --encrypt -r $GPGKEYID > $GPGKEYFILE && echo "done" || ( echo "failed" && exit 1 )
+		exit
+	fi
+	
+	[ -f "$GPGKEYFILE" ] || bailout "Encryption keyfile not found in $GPGKEYFILE"
+	
+	aestest=`echo $DATE | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -G $GPGHOMEDIR | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -d -G $GPGHOMEDIR`
+	
+	if [ "$DATE" != "$aestest" ]; then
+		bailout "AES encryption problem. Unable to decrypt encrypted data."
+	fi
+fi
+
+# MODE FAILSAFE
+[ -z "$MODE" ] && MODE=usage
+
+# Check and process command line arguments
+dohelp=no
+force=no
+for argv in $*; do
+	case $1 in
+		--gen-keyfile)
+			bailout "--gen-keyfile must be the first and only argument."
+			;;
+		--mysql-defaults)			
+			shift
+			MYSQLDEFAULTS="$1"
+			;;
+		--mysql-hostname)
+			shift
+			DBHOST="$1"
+			;;
+		--mysql-username)
+			shift
+			USERNAME="$1"
+			;;
+		--mysql-password)
+			shift
+			PASSWORD="$1"
+			;;
+		--mysql-socket)
+			shift
+			SOCKET="$1"
+			;;
+		--mysql-max-alwd-packet)
+			shift
+			MAX_ALLOWED_PACKET="$1"
+			;;
+		--mysql-compression)
+			shift
+			if [ "$1" = "yes" ]; then
+				COMMCOMP="yes"
+			else
+				COMMCOMP="no"
+			fi
+			;;
+		--pre-backup-cmd)
+			shift
+			PREBACKUP="$1"
+			;;
+		--post-backup-cmd)
+			shift
+			POSTBACKUP="$1"
+			;;
+		--backup-dbs)
+			shift
+			DBNAMES="$1"
+			;;
+		--backup-dbs-monthly)
+			shift
+			MDBNAMES="$1"
+			;;
+		--backup-dbs-exclude)
+			shift
+			DBEXCLUDE="$1"
+			;;
+		--backup-dir)
+			shift
+			BACKUPDIR="$1"
+			;;
+		--backup-separate-dir)
+			shift
+			if [ "$1" = "yes" ]; then
+				SEPDIR="yes"
+			else
+				SEPDIR="no"
+			fi
+			;;
+		--backup-latest-dir)
+			shift
+			if [ "$1" = "yes" ]; then
+				LATEST="yes"
+			else
+				LATEST="no"
+			fi
+			;;
+		--backup-weekly-day)
+			shift
+			arg="$1"
+			case $arg in
+				1|2|3|4|5|6|7)
+					;;
+				*)
+					bailout "Invalid value for --backup-weekly-day"
+					;;
+			esac
+			DOWEEKLY="$arg"
+			;;
+		--backup-use-createdb)
+			shift
+			if [ "$1" = "yes" ]; then
+				CREATE_DATABASE="yes"
+			else
+				CREATE_DATABASE="no"
+			fi
+			;;
+		--backup-use-routines)
+			shift
+			if [ "$1" = "yes" ]; then
+				ROUTINES="yes"
+			else
+				ROUTINES="no"
+			fi
+			;;
+		--backup-encryption)
+			shift
+			if [ "$1" = "yes" ]; then
+				ENC="yes"
+			else
+				ENC="no"
+			fi
+			;;			
+		--backup-compress)
+			shift
+			arg="$1"
+			case $arg in
+				gzip|bzip2)
+					;;
+				*)
+					bailout "Invalid option for --backup-use-compression"
+					;;
+			esac
+			COMP="$arg"
+			;;
+		--gpg-key-id)
+			shift
+			GPGKEYID="$1"
+			;;
+		--gpg-passwd-file)
+			shift
+			GPGPASSWDFILE="$1"
+			;;
+		--gpg-key-file)
+			shift
+			GPGKEYFILE="$1"
+			;;
+		--gpg-home-dir)
+			shift
+			GGPHOMEDIR="$1"
+			;;
+		--mail-content)
+			shift
+			arg="$1"
+			case $arg in
+				log|files|stdout|quiet)
+					;;
+				*)
+					bailout "Invalid option for --mail-content"
+					;;
+			esac
+			MAILCONTENT="$arg"
+			;;
+		--mail-max-att-size)
+			shift
+			MAXATTSIZE="$1"
+			;;
+		--mail-address)
+			shift
+			MAILADDR="$1"
+			;;
+		--config-file)
+			shift
+			. $1
+			;;
+		--backup|-b)
+			MODE=backup
+			;;		
+		--cat|-c)
+			shift
+			MODE=cat
+			backupfile="$1"
+			;;
+		--restore|-r)
+			shift
+			MODE=restore
+			backupfile="$1"
+			;;
+		--target|-t)
+			shift
+			targetdb="$1"
+			;;
+		--force|-f)
+			force=yes
+			;;
+		--license|-l)
+			license
+			exit 255
+			;;
+		--documentation|-d)
+			doc
+			exit 255
+			;;
+		--help|-h)
+			dohelp=yes
+			MODE=usage
+			;;
+		*)
+			if [ "$1" != "" ]; then
+				MODE=usage
+			fi
+			;;
+			
+	esac
+	
+	shift
+done
+
+function beware() {
+	echo "*"
+	echo "* BEWARE!!"
+	echo "* I take no responsibility for any data"
+	echo "* loss or corruption when using this"
+	echo "* script! By using this script, you"
+	echo "* agree to this term and you take"
+	echo "* the responsibility on your own!"
+	echo "*"
+}
+
+# Usage function
+function usage() {
+	echo "**************************************************"
+	echo "* MySQL Safe Backup v$VER"
+	echo "*"
+	echo "* Copyright (c) 2016 Olli@Verbotene.Zone"
+	echo "*"
+	echo "* You love this tool? Donate at:"
+	echo "* https://github.com/VerboteneZone/MySQLSafeBackup"
+
+	beware
+
+	echo "**************************************************"
+	echo ""
+	
+	if [ "$1" = "yes" ]; then
+		echo "Help for $0:"
+		echo ""
+		echo "Default configuration file is /etc/mysqlsafebackup/mysqlsafebackup.conf"
+		echo ""
+		echo "General options:"
+		echo " -h|--help                    Display this help context"
+		echo " -l|--license                 Display license"
+		echo " -d|--documentation           Display documentation"
+		echo " -b|--backup                  Execute backup as configured"
+		echo " -c|--cat <filename>          Concat / display backup file"
+		echo " -r|--restore <filename>      Restore backup file in <filename>"
+		echo " -t|--target <database>       Target database for restore file"
+		echo " -f|--force                   Force restore, without requesting user interaction"
+		echo ""
+		echo "Special operations:"
+		echo " --pre-backup-cmd <cmd>       Execute cmd before the beginning of backup"
+		echo " --post-backup-cmd <cmd>      Execute cmd after backup has been ended"
+		echo " --config-file <filename>     Override defaults configuration file"
+		echo " --gen-keyfile                Generate the GPG keyfile, containing 65 key lines,"
+		echo "                              with a length of 20 characters each, encrytped"
+		echo "                              with configured GPG public key"
+		echo ""
+		echo "MySQL related switches:"
+		echo " --mysql-defaults <filename>  File containing the MySQL defaults to use"
+		echo " --mysql-hostname <hostname>  Hostname of MySQL database server"
+		echo " --mysql-username <username>  Username, needed when no defaults file is present"
+		echo " --mysql-password <password>  Password for the corresponding MySQL user"
+		echo " --mysql-socket <filename>    Optional MySQL socket filename"
+		echo " --mysql-max-alwd-packet <n>  Set the max_allowed_packet parameter"
+		echo " --mysql-compression yes|no   Set MySQL communication compression"
+		echo ""
+		echo "Backup options:"
+		echo " --backup-dbs \"<...>\"|all     Space separated list of databases to backup"
+		echo " --backup-dbs-exclude \"<...>\" Space separated list of databases to exclude"
+		echo " --backup-dbs-monthly \"<...>\" Space separated list of dbs to backup monthly"
+		echo " --backup-dir <path>          Directory to store the backups"
+		echo " --backup-separate-dir yes|no Use separate directory for each database"
+		echo " --backup-latest-dir yes|no   Store latest backups in separate directory"
+		echo " --backup-weekly-dir 1-7      Day on which a weekly backup should be created"
+		echo " --backup-use-createdb yes|no Store CREATE DATABASE in backup files"
+		echo " --backup-use-routines yes|no Store routines in backup files"
+		echo " --backup-encryption yes|no   Use AES encryption for backup files"
+		echo " --backup-compress gzip|bzip2 Use gzip|bzip2 compression for backup files"
+		echo ""
+		echo "GPG control switches:"
+		echo " --gpg-key-id <keyid>         Set public key id for encryption"
+		echo " --gpg-key-file <filename>    Location of encryption key file"
+		echo " --gpg-passwd-file <filename> Location of private key password file"
+		echo " --gpg-home-dir <path>        Directory of gpg home" 
+		echo ""		
+		echo "Swiches for mailing reports:"
+		echo " --mail-address <email>       Set reporting email address"
+		echo " --mail-max-att-size <n>      Max size of mail attachments"
+		echo " --mail-content <option>      Set content for reporting emails"
+		echo "                              available options: log|files|stdout|quiet"
+	else
+		echo "Usage: $0 -b|-c|-h|-r|-d|-l"
+		echo " -h|--help           for displaying full help context"
+		echo " -l|--license        for displaying license"
+		echo " -d|--documentation  for displaying option documentation"
+		echo " -c <file>           for displaying given backup file in <file>"
+		echo " -r <file>           for restoring given backup file in <file>"
+		echo " -b                  for executing backup, configured in"
+		echo "                     /etc/mysqlsafebackup/mysqlsafebackup.conf"
+	fi
+
+	echo ""	
+	exit 255
+}
+
+# Check, whether we are in cat mode
+if [ "$MODE" = "cat" -o "$MODE" = "restore" ]; then
+	[ -n "$backupfile" ] || bailout "Missing file to cat"
+	[ -f "$backupfile" ] || bailout "File not found $backupfile"
+		
+	case $COMP in
+		gzip)
+			decomppipe="gunzip"
+			;;
+		bzip2)
+			decomppipe="bunzip2"
+			;;
+		*)
+			decomppipe="cat"
+			;;
+	esac
+	
+	if [ "$ENC" = "yes" ]; then
+		decpipe="aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -d -G $GPGHOMEDIR"
+	else
+		decpipe="cat"
+	fi
+	
+	if [ "$MODE" = "restore" ]; then
+		if [ -z "${USERNAME}" -o -z "${PASSWORD}" ] ; then
+			RESTOPT="--defaults-file=$MYSQLDEFAULTS"
+		else
+			RESTOPT"--user=$USERNAME --password=$PASSWORD --host=$DBHOST"
+		fi
+		
+		if [ "$force" != "yes" ]; then
+			echo "*****************************************"
+			echo "* WARNING!!"
+			echo "*"
+			echo "* Restoring database backup from"
+			echo "* $backupfile"
+			echo "*"
+			
+			if [ -n "$targetdb" ]; then
+				echo "* to database"
+				echo "* $targetdb"
+			fi
+	
+			beware		
+						
+			echo "*****************************************"
+			echo ""
+			echo -n "IF ARE YOU SURE YOU WANT TO RESTORE, TYPE \"YES\": "
+			read -t 5 startrestore || startrestore=0
+			
+			if [ "$startrestore" = "0" ]; then
+				bailout "Aborted, due to timeout"
+			elif [ "$startrestore" != "YES" ]; then
+				bailout "Aborted, due to user request"
+			fi
+		fi
+		
+		if [ -n "$targetdb" ]; then
+			echo -n "Restoring $backupfile to database $targetdb..."
+			cat $backupfile | $decpipe | $decomppipe 2>/dev/null | grep -v "^CREATE DATABASE " | grep -v "^USE \´" | mysql $RESTOPT "$targetdb" && echo "done" || echo "failed"
+		else
+			echo -n "Restoring $backupfile..."
+			cat $backupfile | $decpipe | $decomppipe 2>/dev/null | mysql $RESTOPT && echo "done" || echo "failed"
+		fi
+	else
+		cat $backupfile | $decpipe | $decomppipe 2>/dev/null
+	fi
+	
+	exit
+elif [ "$MODE" = "usage" ]; then
+	usage $dohelp
+fi
+
+# Add --compress mysqldump option to $OPT
+if [ "$COMMCOMP" = "yes" ];
+	then
+		OPT="$OPT --compress"
+	fi
+
+# Add --routines mysqldum option to ${OPT}
+if [ "${ROUTINES}" = "yes" ];
+	then
+		OPT="${OPT} --routines"
+	fi
+
+# Add --compress mysqldump option to $OPT
+if [ "$MAX_ALLOWED_PACKET" ];
+	then
+		OPT="$OPT --max_allowed_packet=$MAX_ALLOWED_PACKET"
+	fi
+
+# Create required directories
+if [ ! -e "$BACKUPDIR" ]		# Check Backup Directory exists.
+	then
+	mkdir -p "$BACKUPDIR"
+fi
+
+chmod o-x ${BACKUPDIR}
+chmod o-r ${BACKUPDIR}
+
+if [ ! -e "$BACKUPDIR/daily" ]		# Check Daily Directory exists.
+	then
+	mkdir -p "$BACKUPDIR/daily"
+fi
+
+if [ ! -e "$BACKUPDIR/weekly" ]		# Check Weekly Directory exists.
+	then
+	mkdir -p "$BACKUPDIR/weekly"
+fi
+
+if [ ! -e "$BACKUPDIR/monthly" ]	# Check Monthly Directory exists.
+	then
+	mkdir -p "$BACKUPDIR/monthly"
+fi
+
+if [ "$LATEST" = "yes" ]
+then
+	if [ ! -e "$BACKUPDIR/latest" ]	# Check Latest Directory exists.
+	then
+		mkdir -p "$BACKUPDIR/latest"
+	fi
+rm -f "$BACKUPDIR"/latest/*
+fi
+
+# IO redirection for logging.
+touch $LOGFILE
+exec 6>&1           # Link file descriptor #6 with stdout.
+                    # Saves stdout.
+exec > $LOGFILE     # stdout replaced with file $LOGFILE.
+touch $LOGERR
+exec 7>&2           # Link file descriptor #7 with stderr.
+                    # Saves stderr.
+exec 2> $LOGERR     # stderr replaced with file $LOGERR.
+
+# Functions
+
+# Database dump function
+SUFFIX=""
+dbdump () {
+	if [ $1 = "information_schema" ] ; then
+		NEWOPT="--skip-opt ${OPT}"
+	else
+		NEWOPT="--opt $OPT"
+	fi
+	
+	if [ -z "${USERNAME}" -o -z "${PASSWORD}" ] ; then
+		DUMPOPT="--defaults-file=$MYSQLDEFAULTS $NEWOPT"
+	else
+		DUMPOPT"--user=$USERNAME --password=$PASSWORD --host=$DBHOST $NEWOPT"
+	fi
+	
+	SUFFIX=""
+	
+	echo -n "Backing up $1"
+	
+	case $COMP in
+		gzip)
+			comppipe="gzip"
+			SUFFIX="${SUFFIX}.gz"
+			echo -n ", gzip compressed"
+			;;
+		bzip2)
+			comppipe="bzip2"
+			SUFFIX="${SUFFIX}.bz2"
+			echo -n ", bzip2 compressed"
+			;;
+		*)
+			comppipe="cat"
+			;;
+	esac
+	
+	if [ "$ENC" = "yes" ]; then
+		encpipe="aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -G $GPGHOMEDIR"
+		SUFFIX="${SUFFIX}.aes"
+		echo -n ", aes encrypted"
+	else
+		encpipe="cat"
+	fi
+	
+	outfile="${2}${SUFFIX}"	
+	
+	touch $outfile
+	chmod 600 $outfile
+
+	echo -n " to ${outfile}..."
+
+	r=0
+
+	mysqldump $DUMPOPT $1 | $comppipe | $encpipe > $outfile && ( echo "done" && r=0 ) || ( echo "failed" && r=1 )
+
+        if [ "$LATEST" = "yes" ]; then
+           cp ${outfile} "$BACKUPDIR/latest/"
+        fi
+        
+        return $r
+}
+
+# Run command before we begin
+if [ "$PREBACKUP" ]
+	then
+	echo ======================================================================
+	echo "Prebackup command output."
+	echo
+	$PREBACKUP
+	echo
+	echo ======================================================================
+	echo
+fi
+
+
+if [ "$SEPDIR" = "yes" ]; then # Check if CREATE DATABSE should be included in Dump
+	if [ "$CREATE_DATABASE" = "no" ]; then
+		OPT="$OPT --no-create-db"
+	else
+		OPT="$OPT --databases"
+	fi
+else
+	OPT="$OPT --databases"
+fi
+
+# Hostname for LOG information
+if [ "$DBHOST" = "localhost" ]; then
+	HOST=`hostname`
+	if [ "$SOCKET" ]; then
+		OPT="$OPT --socket=$SOCKET"
+	fi
+else
+	HOST=$DBHOST
+fi
+
+# If backing up all DBs on the server
+if [ "$DBNAMES" = "all" ]; then
+	if [ -z "${USERNAME}" -o -z "${PASSWORD}" ] ; then
+        DBNAMES="`mysql --defaults-file=$MYSQLDEFAULTS --batch --skip-column-names -e "show databases"| sed 's/ /%/g'`"
+	else
+        DBNAMES="`mysql --user=$USERNAME --password=$PASSWORD --host=$DBHOST --batch --skip-column-names -e "show databases"| sed 's/ /%/g'`"
+	fi
+
+	# If DBs are excluded
+	for exclude in $DBEXCLUDE
+	do
+		DBNAMES=`echo $DBNAMES | sed "s/\b$exclude\b//g"`
+	done
+
+        MDBNAMES=$DBNAMES
+fi
+	
+echo ======================================================================
+echo MySQLSafeBackup VER $VER
+echo https://github.com/VerboteneZone/MySQLSafeBackup
+echo 
+echo Backup of Database Server - $HOST
+echo ======================================================================
+
+# Testing, whether seperate DB backups are required
+if [ "$SEPDIR" = "yes" ]; then
+echo Backup Start Time `date`
+echo ======================================================================
+	# Monthly Full Backup of all Databases
+	if [ "$DOM" = "01" ]; then
+		for MDB in $MDBNAMES
+		do
+ 
+			 # Prepare $DB for using
+		        MDB="`echo $MDB | sed 's/%/ /g'`"
+
+			if [ ! -e "$BACKUPDIR/monthly/$MDB" ]		# Check Monthly DB Directory exists.
+			then
+				mkdir -p "$BACKUPDIR/monthly/$MDB"
+			fi
+			echo Monthly Backup of $MDB...
+				dbdump "$MDB" "$BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql"
+				BACKUPFILES="$BACKUPFILES $BACKUPDIR/monthly/$MDB/${MDB}_$DATE.$M.$MDB.sql$SUFFIX"
+			echo ----------------------------------------------------------------------
+		done
+	fi
+
+	for DB in $DBNAMES
+	do
+	# Prepare $DB for using
+	DB="`echo $DB | sed 's/%/ /g'`"
+	
+	# Create Seperate directory for each DB
+	if [ ! -e "$BACKUPDIR/daily/$DB" ]		# Check Daily DB Directory exists.
+		then
+		mkdir -p "$BACKUPDIR/daily/$DB"
+	fi
+	
+	if [ ! -e "$BACKUPDIR/weekly/$DB" ]		# Check Weekly DB Directory exists.
+		then
+		mkdir -p "$BACKUPDIR/weekly/$DB"
+	fi
+	
+	# Weekly Backup
+	if [ "$DNOW" = "$DOWEEKLY" ]; then
+		echo Weekly Backup of Database \( $DB \)
+		echo Rotating 5 weeks Backups...
+			if [ "$W" -le 05 ];then
+				REMW=`expr 48 + $W`
+			elif [ "$W" -lt 15 ];then
+				REMW=0`expr $W - 5`
+			else
+				REMW=`expr $W - 5`
+			fi
+		rm -fv "$BACKUPDIR/weekly/$DB/${DB}_week.$REMW".*
+		echo
+			dbdump "$DB" "$BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql"
+			BACKUPFILES="$BACKUPFILES $BACKUPDIR/weekly/$DB/${DB}_week.$W.$DATE.sql$SUFFIX"
+		echo ----------------------------------------------------------------------
+	
+	# Daily Backup
+	else
+		echo Daily Backup of Database \( $DB \)
+		echo Rotating last weeks Backup...
+		rm -fv "$BACKUPDIR/daily/$DB"/*."$DOW".sql.*
+		echo
+			dbdump "$DB" "$BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql"
+			BACKUPFILES="$BACKUPFILES $BACKUPDIR/daily/$DB/${DB}_$DATE.$DOW.sql$SUFFIX"
+		echo ----------------------------------------------------------------------
+	fi
+	done
+echo Backup End `date`
+echo ======================================================================
+
+
+else # One backup file for all DBs
+echo Backup Start `date`
+echo ======================================================================
+	# Monthly Full Backup of all Databases
+	if [ "$DOM" = "01" ]; then
+		echo Monthly full Backup of \( $MDBNAMES \)...
+			dbdump "$MDBNAMES" "$BACKUPDIR/monthly/$DATE.$M.all-databases.sql"
+			BACKUPFILES="$BACKUPFILES $BACKUPDIR/monthly/$DATE.$M.all-databases.sql$SUFFIX"
+		echo ----------------------------------------------------------------------
+	fi
+
+	# Weekly Backup
+	if [ "$DNOW" = "$DOWEEKLY" ]; then
+		echo Weekly Backup of Databases \( $DBNAMES \)
+		echo
+		echo Rotating 5 weeks Backups...
+			if [ "$W" -le 05 ];then
+				REMW=`expr 48 + $W`
+			elif [ "$W" -lt 15 ];then
+				REMW=0`expr $W - 5`
+			else
+				REMW=`expr $W - 5`
+			fi
+		rm -fv "$BACKUPDIR/weekly/week.$REMW".*
+		echo
+			dbdump "$DBNAMES" "$BACKUPDIR/weekly/week.$W.$DATE.sql"
+			BACKUPFILES="$BACKUPFILES $BACKUPDIR/weekly/week.$W.$DATE.sql$SUFFIX"
+		echo ----------------------------------------------------------------------
+		
+	# Daily Backup
+	else
+		echo Daily Backup of Databases \( $DBNAMES \)
+		echo
+		echo Rotating last weeks Backup...
+		rm -fv "$BACKUPDIR"/daily/*."$DOW.sql".*
+		echo
+			dbdump "$DBNAMES" "$BACKUPDIR/daily/$DATE.$DOW.sql"
+			BACKUPFILES="$BACKUPFILES $BACKUPDIR/daily/$DATE.$DOW.sql$SUFFIX"
+		echo ----------------------------------------------------------------------
+	fi	
+echo Backup End Time `date`
+echo ======================================================================
+fi
+echo Total disk space used for backup storage..
+echo Size - Location
+echo `du -hs "$BACKUPDIR"`
+echo
+echo ======================================================================
+echo If you find MySQLSafeBackup valuable please make a donation at
+echo https://github.com/VerboteneZone/MySQLSafeBackup
+echo ======================================================================
+
+echo $BACKUPFILES > "$BACKUPDIR/backupfiles_$DATE.$DOW.fil"
+
+# Run command when we're done
+if [ "$POSTBACKUP" ]
+	then
+	echo ======================================================================
+	echo "Postbackup command output."
+	echo
+	$POSTBACKUP
+	echo
+	echo ======================================================================
+fi
+
+#Clean up IO redirection
+exec 1>&6 6>&-      # Restore stdout and close file descriptor #6.
+exec 1>&7 7>&-      # Restore stdout and close file descriptor #7.
+
+if [ "$MAILCONTENT" = "files" ]
+then
+	if [ -s "$LOGERR" ]
+	then
+		# Include error log if is larger than zero.
+		BACKUPFILES="$BACKUPFILES $LOGERR"
+		ERRORNOTE="WARNING: Error Reported - "
+	fi
+	#Get backup size
+	ATTSIZE=`du -c $BACKUPFILES | grep "[[:digit:][:space:]]total$" |sed s/\s*total//`
+	if [ $MAXATTSIZE -ge $ATTSIZE ]
+	then
+		BACKUPFILES=`echo "$BACKUPFILES" | sed -e "s# # -a #g"`	#enable multiple attachments
+		mutt -s "$ERRORNOTE MySQL Backup Log and SQL Files for $HOST - $DATE" $BACKUPFILES -- $MAILADDR < $LOGFILE		#send via mutt
+	else
+		cat "$LOGFILE" | mail -s "WARNING! - MySQL Backup exceeds set maximum attachment size on $HOST - $DATE" $MAILADDR
+	fi
+elif [ "$MAILCONTENT" = "log" ]
+then
+	cat "$LOGFILE" | mail -s "MySQL Backup Log for $HOST - $DATE" $MAILADDR
+	if [ -s "$LOGERR" ]
+		then
+			cat "$LOGERR" | mail -s "ERRORS REPORTED: MySQL Backup error Log for $HOST - $DATE" $MAILADDR
+	fi	
+elif [ "$MAILCONTENT" = "quiet" ]
+then
+	if [ -s "$LOGERR" ]
+		then
+			cat "$LOGERR" | mail -s "ERRORS REPORTED: MySQL Backup error Log for $HOST - $DATE" $MAILADDR
+			cat "$LOGFILE" | mail -s "MySQL Backup Log for $HOST - $DATE" $MAILADDR
+	fi
+else
+	if [ -s "$LOGERR" ]
+		then
+			cat "$LOGFILE"
+			echo
+			echo "###### WARNING ######"
+			echo "Errors reported during MySQLSafeBackup execution.. Backup failed"
+			echo "Error log below.."
+			cat "$LOGERR"
+	else
+		cat "$LOGFILE"
+	fi	
+fi
+
+if [ -s "$LOGERR" ]
+	then
+		STATUS=1
+	else
+		STATUS=0
+fi
+
+# Clean up Logfile
+rm -f "$LOGFILE"
+rm -f "$LOGERR"
+
+exit $STATUS
