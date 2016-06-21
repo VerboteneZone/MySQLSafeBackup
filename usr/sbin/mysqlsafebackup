@@ -906,6 +906,7 @@ dbdump () {
 	mysqldump $DUMPOPT $1 | $comppipe | $encpipe > $outfile && ( echo "done" && r=0 ) || ( echo "failed" && r=1 )
 
         if [ "$LATEST" = "yes" ]; then
+           mkdir -p "$BACKUPDIR/latest/" >/dev/null 2>&1
            cp ${outfile} "$BACKUPDIR/latest/"
         fi
         
