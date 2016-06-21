@@ -1,6 +1,8 @@
 # MySQLSafeBackup
 MySQLSafeBackup lets you dump / backup mysql databases, encrypt and also compress the output files. Also restoring of encrypted mysql backup files is supported.
 
+<a href="https://www.paypal.com/cgi-bin/webscr?cmd=_donations&business=helga_welter%40hotmail%2ecom&lc=MQ&item_name=Oliver%20Welter&item_number=mysqlsafebackup&no_note=0&currency_code=EUR&bn=PP%2dDonationsBF%3abtn_donate_LG%2egif%3aNonHostedGuest">Make a donation</a>
+
 <h4>Beware</h4>
 <p>
 I take no responsibility for any data loss or corruption when using mysqlsafebackup or the following documentration! 
