@@ -151,6 +151,15 @@ SOCKET=
 # Backup of stored procedures and routines
 ROUTINES=yes
 
+# System log path
+LOGPATH="/var/log/mysqlsafebackup"
+
+# System run path
+RUNPATH="/var/run"
+
+# Program name (needed for RUNPATH)
+PRGNAME=`basename $0`
+
 fi
 
 function doc() {
@@ -285,6 +294,16 @@ cat <<EOF
 # Use PREBACKUP and POSTBACKUP to specify Per and Post backup commands
 # or scripts to perform tasks either before or after the backup process.
 #
+# LOGPATH is set to a separate location. By default it's set to
+# /var/log/mysqlsafebackup - DO NOT SET THIS TO OR WITHIN BACKUPDIR,
+# BECAUSE FOLDER GENERATION AND LOCKING MY FAIL, WHILE BACKUPDIR IS A 
+# SHARE, MOUNTED BY PREBACKUP SCRIPT!
+#
+# RUNPATH is the location of pid and locking file. By default 
+# /var/run - DO NOT SET THIS TO OR WITHIN BACKUPDIR, SEE ABOVE!
+#
+# PRGNAME is the name of this script, used for locking and pid.
+#
 #=====================================================================
 # Backup Rotation..
 #=====================================================================
@@ -345,6 +364,14 @@ cat <<EOF
 # Change Log
 #=====================================================================
 #
+# VER 1.01 - (2016-06-22)
+#               Fixes and extensions
+#                  fixed PREBACKUP path creation issue
+#                  fixed missing GNUPGHOMEDIR issue
+#                  added LOGPATH, RUNPATH, PRGNAME variables
+#                  added runtime locking support
+#                  added state file support
+#
 # VER 1.0 - (2016-06-21)
 #		Initial fork of automysqlbackup
 #                  added crypto support
@@ -365,6 +392,15 @@ EOF
 #=====================================================================
 #=====================================================================
 
+# Failsafe for missing LOGPATH
+[ -n "$LOGPATH" ] || LOGPATH="$BACKUPDIR"
+
+# Failsafe for missing RUNPATH
+[ -n "$RUNPATH" ] || RUNPATH="$BACKUPDIR"
+
+# Failsafe for missing PRGNAME
+[ -n "$PRGNAME" ] || RUNPATH=`basename $0`
+
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/mysql/bin 
 DATE=`date +%Y-%m-%d_%Hh%Mm`				# Datestamp e.g 2002-09-21
 DOW=`date +%A`							# Day of the week e.g. Monday
@@ -372,9 +408,11 @@ DNOW=`date +%u`						# Day number of the week 1 to 7 where 1 represents Monday
 DOM=`date +%d`							# Date of the Month e.g. 27
 M=`date +%B`							# Month e.g January
 W=`date +%V`							# Week Number e.g 37
-VER=1.0									# Version Number
-LOGFILE=$BACKUPDIR/$DBHOST-`date +%N`.log		# Logfile Name
-LOGERR=$BACKUPDIR/ERRORS_$DBHOST-`date +%N`.log		# Logfile Name
+VER=1.01							# Version Number
+LOGFILE=$LOGPATH/$DBHOST-`date +%N`.log		# Logfile Name
+LOGERR=$LOGPATH/ERRORS_$DBHOST-`date +%N`.log		# Logfile Name
+LOCKFILE="$RUNPATH/$PRGNAME.pid"
+STATEFILE="$RUNPATH/$PRGNAME.state"
 BACKUPFILES=""
 OPT="--quote-names --events"			# OPT string for use with mysqldump ( see man mysqldump )
 backupfile=""
@@ -408,6 +446,18 @@ fi
 
 # MODE FAILSAFE
 [ -z "$MODE" ] && MODE=usage
+
+# Credit function
+function credit() {
+	echo "Credit:"
+	echo "This is a fork of automysqlbackup 2.5 by wipe_out@lycos.co.uk"
+	echo "Visit http://sourceforge.net/projects/automysqlbackup/"		
+	echo ""
+	echo "Copyright:"
+	echo "(c) 2016 Oliver Welter <olli@verbotene.zone>"
+	echo "Visit https://github.com/VerboteneZone/MySQLSafeBackup"
+	echo ""
+}
 
 # Check and process command line arguments
 dohelp=no
@@ -597,13 +647,31 @@ for argv in $*; do
 		--force|-f)
 			force=yes
 			;;
+		--log-path)
+			shift
+			LOGPATH="$1"
+			;;
+		--run-path)
+			shift
+			RUNPATH="$1"
+			;;
+		--program-name)
+			shift
+			PRGNAME="$1"
+			;;
 		--license|-l)
 			license
-			exit 255
+			exit
 			;;
 		--documentation|-d)
 			doc
-			exit 255
+			exit
+			;;
+		--version|-v)
+			echo "MySQLSafeBackup v$VER"
+			echo ""
+			credit
+			exit
 			;;
 		--help|-h)
 			dohelp=yes
@@ -634,9 +702,7 @@ function beware() {
 # Usage function
 function usage() {
 	echo "**************************************************"
-	echo "* MySQL Safe Backup v$VER"
-	echo "*"
-	echo "* Copyright (c) 2016 Olli@Verbotene.Zone"
+	echo "* MySQLSafeBackup v$VER"
 	echo "*"
 	echo "* You love this tool? Donate at:"
 	echo "* https://github.com/VerboteneZone/MySQLSafeBackup"
@@ -652,6 +718,7 @@ function usage() {
 		echo "Default configuration file is /etc/mysqlsafebackup/mysqlsafebackup.conf"
 		echo ""
 		echo "General options:"
+		echo " -v|--version                 Display version information"
 		echo " -h|--help                    Display this help context"
 		echo " -l|--license                 Display license"
 		echo " -d|--documentation           Display documentation"
@@ -665,6 +732,9 @@ function usage() {
 		echo " --pre-backup-cmd <cmd>       Execute cmd before the beginning of backup"
 		echo " --post-backup-cmd <cmd>      Execute cmd after backup has been ended"
 		echo " --config-file <filename>     Override defaults configuration file"
+		echo " --log-path <path>            Set log path to other location"
+		echo " --run-path <path>            Set run path to other location"
+		echo " --program-name <name>        Set program name"
 		echo " --gen-keyfile                Generate the GPG keyfile, containing 65 key lines,"
 		echo "                              with a length of 20 characters each, encrytped"
 		echo "                              with configured GPG public key"
@@ -714,6 +784,7 @@ function usage() {
 	fi
 
 	echo ""	
+	credit
 	exit 255
 }
 
@@ -808,6 +879,62 @@ if [ "$MAX_ALLOWED_PACKET" ];
 		OPT="$OPT --max_allowed_packet=$MAX_ALLOWED_PACKET"
 	fi
 
+# Ensure LOGPATH and RUNPATH exist
+if [ ! -e "$LOGPATH" ]; then
+	mkdir -p "$LOGPATH" >/dev/null 2>&1
+fi
+
+if [ ! -e "$RUNPATH" ]; then
+	mkdir -p "$RUNPATH" >/dev/null 2>&1
+fi
+
+# Check locking
+if [ -e "$LOCKFILE" ]; then
+	lockpid=`cat $LOCKFILE`
+	
+	if [ ! -n "$lockpid" ]; then
+		rm -f $LOCKFILE >/dev/null 2>&1
+	elif [ ! -e "/proc/$lockpid" ]; then
+		rm -f $LOCKFILE >/dev/null 2>&1
+	else	
+		pidproc=`cat /proc/$lockpid/cmdline 2>/dev/null | grep $PRGNAME`
+		
+		if [ -n "$pidproc" ]; then
+			bailout "Another instance of $PRGNAME is running at PID $lockpid"
+		else
+			rm -f $LOCKFILE >/dev/null 2>&1
+		fi
+	fi
+fi
+
+# Create lockfile
+touch $LOCKFILE
+chmod 600 $LOCKFILE
+echo $$ > $LOCKFILE
+
+# IO redirection for logging.
+touch $LOGFILE
+exec 6>&1           # Link file descriptor #6 with stdout.
+                    # Saves stdout.
+exec > $LOGFILE     # stdout replaced with file $LOGFILE.
+touch $LOGERR
+exec 7>&2           # Link file descriptor #7 with stderr.
+                    # Saves stderr.
+exec 2> $LOGERR     # stderr replaced with file $LOGERR.
+
+# Run command before we begin
+if [ "$PREBACKUP" ]
+	then
+	echo "prebackup:$PREBACKUP" > $STATEFILE
+	echo ======================================================================
+	echo "Prebackup command output."
+	echo
+	$PREBACKUP
+	echo
+	echo ======================================================================
+	echo
+fi
+
 # Create required directories
 if [ ! -e "$BACKUPDIR" ]		# Check Backup Directory exists.
 	then
@@ -840,16 +967,6 @@ then
 	fi
 rm -f "$BACKUPDIR"/latest/*
 fi
-
-# IO redirection for logging.
-touch $LOGFILE
-exec 6>&1           # Link file descriptor #6 with stdout.
-                    # Saves stdout.
-exec > $LOGFILE     # stdout replaced with file $LOGFILE.
-touch $LOGERR
-exec 7>&2           # Link file descriptor #7 with stderr.
-                    # Saves stderr.
-exec 2> $LOGERR     # stderr replaced with file $LOGERR.
 
 # Functions
 
@@ -905,28 +1022,23 @@ dbdump () {
 
 	r=0
 
+	echo "backup:$1:$comppipe:$encpipe:$outfile:$DUMPOPT" > $STATEFILE
 	mysqldump $DUMPOPT $1 | $comppipe | $encpipe > $outfile && ( echo "done" && r=0 ) || ( echo "failed" && r=1 )
 
-        if [ "$LATEST" = "yes" ]; then
+        if [ "$LATEST" = "yes" -a "$r" = "0" ]; then
+  	   echo "copytolatest:$1:$comppipe:$encpipe:$outfile:$DUMPOPT" > $STATEFILE
            mkdir -p "$BACKUPDIR/latest/" >/dev/null 2>&1
            cp ${outfile} "$BACKUPDIR/latest/"
         fi
         
+        if [ "$r" = "0" ]; then
+  	   echo "done:$1:$comppipe:$encpipe:$outfile:$DUMPOPT" > $STATEFILE
+	else
+  	   echo "failed:$1:$comppipe:$encpipe:$outfile:$DUMPOPT" > $STATEFILE
+	fi        
+        
         return $r
 }
-
-# Run command before we begin
-if [ "$PREBACKUP" ]
-	then
-	echo ======================================================================
-	echo "Prebackup command output."
-	echo
-	$PREBACKUP
-	echo
-	echo ======================================================================
-	echo
-fi
-
 
 if [ "$SEPDIR" = "yes" ]; then # Check if CREATE DATABSE should be included in Dump
 	if [ "$CREATE_DATABASE" = "no" ]; then
@@ -1095,11 +1207,13 @@ echo If you find MySQLSafeBackup valuable please make a donation at
 echo https://github.com/VerboteneZone/MySQLSafeBackup
 echo ======================================================================
 
-echo $BACKUPFILES > "$BACKUPDIR/backupfiles_$DATE.$DOW.fil"
+# Export BACKUPFILES, so that we can use it in POSTBACKUP script
+export BACKUPFILES
 
 # Run command when we're done
 if [ "$POSTBACKUP" ]
 	then
+	echo "postbackup:$POSTBACKUP" > $STATEFILE
 	echo ======================================================================
 	echo "Postbackup command output."
 	echo
@@ -1164,8 +1278,9 @@ if [ -s "$LOGERR" ]
 		STATUS=0
 fi
 
-# Clean up Logfile
-rm -f "$LOGFILE"
-rm -f "$LOGERR"
+echo "idle" > $STATEFILE
+
+# Remove lockfile
+rm -f $LOCKFILE >/dev/null 2>&1
 
 exit $STATUS
