@@ -380,6 +380,8 @@ OPT="--quote-names --events"			# OPT string for use with mysqldump ( see man mys
 backupfile=""
 targetdb=""
 
+export GNUPGHOME=$GPGHOMEDIR                                    # Issue #2 - make gpg finding it's homedir
+
 # Check, whether we have to encrypt and anything works fine
 if [ "$ENC" = "yes" ]; then
 	[ -n "$GPGHOMEDIR" ] || bailout "GPG home directory not set"
