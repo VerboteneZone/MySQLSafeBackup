@@ -436,8 +436,9 @@ if [ "$ENC" = "yes" ]; then
 	fi
 	
 	[ -f "$GPGKEYFILE" ] || bailout "Encryption keyfile not found in $GPGKEYFILE"
-	
-	aestest=`echo $DATE | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -G $GPGHOMEDIR | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -d -G $GPGHOMEDIR`
+#	aestest=`echo "$DATE" | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -G $GPGHOMEDIR | aespipe -P $GPGPASSWDFILE -K $GPGKEYFILE -d -G $GPGHOMEDIR`
+
+	aestest=`echo "$DATE" | gpg --encrypt -r $GPGKEYID 2>/dev/null | gpg --batch --decrypt -r $GPGKEYID --passphrase-file $GPGKEYFILE 2>/dev/null`
 	
 	if [ "$DATE" != "$aestest" ]; then
 		bailout "AES encryption problem. Unable to decrypt encrypted data."
@@ -982,7 +983,7 @@ dbdump () {
 	if [ -z "${USERNAME}" -o -z "${PASSWORD}" ] ; then
 		DUMPOPT="--defaults-file=$MYSQLDEFAULTS $NEWOPT"
 	else
-		DUMPOPT"--user=$USERNAME --password=$PASSWORD --host=$DBHOST $NEWOPT"
+		DUMPOPT="--user=$USERNAME --password=$PASSWORD --host=$DBHOST $NEWOPT"
 	fi
 	
 	SUFFIX=""
