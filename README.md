@@ -1,6 +1,17 @@
 # MySQLSafeBackup
 MySQLSafeBackup lets you dump / backup mysql databases, encrypt and also compress the output files. Also restoring of encrypted mysql backup files is supported.
 
+# Making MySQLSafeBackup work with gnupg2
+To do this, you have to add the file gpg.conf in the GNUPGHOME of
+MySQLSafeBackup, with the following contents:
+
+  use-agent
+  pinentry-mode loopback
+
+Also add gpg-agent.conf with:
+
+  allow-loopback-pinentry
+
 # Debian package
 You can find a .deb package for using with dpkg here: https://github.com/VerboteneZone/MySQLSafeBackup/releases
 
