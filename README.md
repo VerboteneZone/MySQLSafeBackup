@@ -5,12 +5,16 @@ MySQLSafeBackup lets you dump / backup mysql databases, encrypt and also compres
 To do this, you have to add the file gpg.conf in the GNUPGHOME of
 MySQLSafeBackup, with the following contents:
 
-  use-agent
-  pinentry-mode loopback
+<pre>
+use-agent
+pinentry-mode loopback
+</pre>
 
 Also add gpg-agent.conf with:
 
-  allow-loopback-pinentry
+<pre>
+allow-loopback-pinentry
+</pre>
 
 # Debian package
 You can find a .deb package for using with dpkg here: https://github.com/VerboteneZone/MySQLSafeBackup/releases
